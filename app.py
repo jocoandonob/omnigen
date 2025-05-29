@@ -1,10 +1,24 @@
 import streamlit as st
+
+# Set page config - must be the first Streamlit command
+st.set_page_config(
+    page_title="Text-to-Image & Image Editor",
+    page_icon="🎨",
+    layout="wide"
+)
+
+# Now import other modules
 import torch
-from diffusers import StableDiffusionPipeline, DiffusionPipeline
+from diffusers import OmniGenPipeline
 from PIL import Image
 import io
 import os
-from diffusers.utils import load_image
+import time
+
+# Check CUDA availability
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+if DEVICE == "cpu":
+    st.warning("⚠️ CUDA is not available. Running on CPU will be very slow!")
 
 # Custom CSS for professional look
 st.markdown(
@@ -58,39 +72,53 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Set page config
-st.set_page_config(
-    page_title="Text-to-Image & Image Editor",
-    page_icon="🎨",
-    layout="wide"
-)
+# Initialize the models with loading state
+@st.cache_resource(show_spinner=False)
+def load_t2i_model():
+    try:
+        # Show loading state
+        with st.spinner("Loading text-to-image model... This may take a few minutes on first run."):
+            # Text to Image model
+            t2i_pipe = OmniGenPipeline.from_pretrained(
+                "Shitao/OmniGen-v1-diffusers",
+                torch_dtype=torch.float32
+            )
+            t2i_pipe.to(DEVICE)
+            return t2i_pipe
+    except ImportError as e:
+        st.error(f"Error loading text-to-image model: {str(e)}")
+        st.info("Please wait a moment and refresh the page. If the error persists, try reinstalling the requirements.")
+        return None
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {str(e)}")
+        return None
 
-# Initialize the models
-@st.cache_resource
-def load_models():
-    # Text to Image model
-    t2i_pipe = StableDiffusionPipeline.from_pretrained(
-        "runwayml/stable-diffusion-v1-5",
-        torch_dtype=torch.float16
-    )
-    t2i_pipe.to("cuda")
-    
-    # Image Editing model
-    edit_pipe = DiffusionPipeline.from_pretrained(
-        "Shitao/OmniGen-v1-diffusers",
-        custom_pipeline="omnigen/pipeline_omnigen.py",
-        torch_dtype=torch.bfloat16
-    )
-    edit_pipe.to("cuda")
-    
-    return t2i_pipe, edit_pipe
+@st.cache_resource(show_spinner=False)
+def load_edit_model():
+    try:
+        # Show loading state
+        with st.spinner("Loading image editing model... This may take a few minutes on first run."):
+            # Image Editing model
+            edit_pipe = OmniGenPipeline.from_pretrained(
+                "Shitao/OmniGen-v1-diffusers",
+                torch_dtype=torch.float32
+            )
+            edit_pipe.to(DEVICE)
+            return edit_pipe
+    except ImportError as e:
+        st.error(f"Error loading image editing model: {str(e)}")
+        st.info("Please wait a moment and refresh the page. If the error persists, try reinstalling the requirements.")
+        return None
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {str(e)}")
+        return None
 
 # Main header
 st.markdown(
     """
     <div class="main-header">
         <h1>🎨 OmniGen Studio</h1>
-        <p>Generate and edit images with AI. Powered by Stable Diffusion & OmniGen.</p>
+        <p>Generate and edit images with AI. Powered by OmniGen.</p>
     </div>
     """,
     unsafe_allow_html=True
@@ -101,20 +129,43 @@ tab1, tab2 = st.tabs(["Text to Image", "Image Editing"])
 
 # Text to Image Tab
 with tab1:
+    # Load text-to-image model
+    t2i_pipe = load_t2i_model()
+    
+    if t2i_pipe is None:
+        st.markdown(
+            """
+            <div class="loading-container">
+                <div class="loading-text">
+                    <h3>⚠️ Text-to-Image model is still loading...</h3>
+                    <p>Please wait a moment and refresh the page.</p>
+                    <p>If the error persists, try:</p>
+                    <ul>
+                        <li>Refreshing the page</li>
+                        <li>Reinstalling the requirements</li>
+                        <li>Checking your internet connection</li>
+                    </ul>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        st.stop()
+        
     with st.container():
         st.markdown('<div class="section">', unsafe_allow_html=True)
         st.subheader("Text to Image Generator")
         st.markdown("""
-        Generate high-quality images from text descriptions using Stable Diffusion.
+        Generate high-quality images from text descriptions using OmniGen.
         """)
 
         # Sidebar for parameters
         st.sidebar.header("Text-to-Image Parameters")
-        height = st.sidebar.slider("Image Height", 512, 1024, 512, step=64)
-        width = st.sidebar.slider("Image Width", 512, 1024, 512, step=64)
-        guidance_scale = st.sidebar.slider("Guidance Scale", 1.0, 20.0, 7.5, step=0.1)
+        height = st.sidebar.slider("Image Height", 512, 1024, 1024, step=64)
+        width = st.sidebar.slider("Image Width", 512, 1024, 1024, step=64)
+        guidance_scale = st.sidebar.slider("Guidance Scale", 1.0, 20.0, 3.0, step=0.1)
         num_inference_steps = st.sidebar.slider("Number of Steps", 20, 100, 50, step=1)
-        seed = st.sidebar.number_input("Seed", value=42, step=1)
+        seed = st.sidebar.number_input("Seed", value=111, step=1)
 
         # Main content
         prompt = st.text_area(
@@ -133,11 +184,8 @@ with tab1:
             if prompt:
                 with st.spinner("Generating image..."):
                     try:
-                        # Load model
-                        t2i_pipe, _ = load_models()
-                        
                         # Generate image
-                        generator = torch.Generator(device="cuda").manual_seed(seed)
+                        generator = torch.Generator(device=DEVICE).manual_seed(seed)
                         image = t2i_pipe(
                             prompt=prompt,
                             negative_prompt=negative_prompt if negative_prompt else None,
@@ -171,6 +219,29 @@ with tab1:
 
 # Image Editing Tab
 with tab2:
+    # Load image editing model
+    edit_pipe = load_edit_model()
+    
+    if edit_pipe is None:
+        st.markdown(
+            """
+            <div class="loading-container">
+                <div class="loading-text">
+                    <h3>⚠️ Image Editing model is still loading...</h3>
+                    <p>Please wait a moment and refresh the page.</p>
+                    <p>If the error persists, try:</p>
+                    <ul>
+                        <li>Refreshing the page</li>
+                        <li>Reinstalling the requirements</li>
+                        <li>Checking your internet connection</li>
+                    </ul>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        st.stop()
+        
     with st.container():
         st.markdown('<div class="section">', unsafe_allow_html=True)
         st.subheader("Image Editor")
@@ -205,14 +276,11 @@ with tab2:
                 if edit_prompt:
                     with st.spinner("Editing image..."):
                         try:
-                            # Load model
-                            _, edit_pipe = load_models()
-                            
                             # Format prompt for OmniGen
                             formatted_prompt = f"<img><|image_1|></img> {edit_prompt}"
                             
                             # Generate edited image
-                            generator = torch.Generator(device="cuda").manual_seed(edit_seed)
+                            generator = torch.Generator(device=DEVICE).manual_seed(edit_seed)
                             edited_image = edit_pipe(
                                 prompt=formatted_prompt,
                                 input_images=[input_image],
