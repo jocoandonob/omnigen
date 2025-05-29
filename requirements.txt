@@ -1,0 +1,7 @@
+streamlit==1.32.0
+torch==2.2.0
+torchvision==0.17.0
+diffusers==0.28.1
+transformers==4.52.3
+accelerate==0.27.0
+huggingface_hub==0.20.3 
